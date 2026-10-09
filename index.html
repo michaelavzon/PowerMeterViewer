@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14161a" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PowerMeter">
+<title>PowerMeter Results</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --text: #1d2025; --muted: #646b75; --line: #e2e5ea;
+  --accent: #1f6feb; --accent-soft: #e8f0fe; --chip: #eceff3; --bad: #c92a2a;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14161a; --card: #1d2026; --text: #e7e9ec; --muted: #9aa1ab; --line: #30343c;
+          --accent: #6ea8fe; --accent-soft: #1c2b44; --chip: #262a31; --bad: #ff8787; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--bg);
+  padding: calc(env(safe-area-inset-top) + 10px) 16px 8px; border-bottom: 1px solid var(--line); }
+.bar { display: flex; align-items: center; gap: 8px; }
+.bar h1 { font-size: 18px; margin: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button { font: inherit; color: var(--text); background: var(--chip); border: 0; border-radius: 10px;
+  padding: 7px 12px; cursor: pointer; }
+button.primary { background: var(--accent); color: #fff; }
+.icon { padding: 7px 10px; }
+.tabs { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { flex: none; border-radius: 999px; font-size: 14px; }
+.tabs button.on { background: var(--accent); color: #fff; }
+main { padding: 12px 16px calc(env(safe-area-inset-bottom) + 32px); max-width: 980px; margin: 0 auto; }
+.list { display: flex; flex-direction: column; gap: 8px; }
+.item { display: block; background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 14px; color: inherit; text-decoration: none; }
+.item b { display: block; font-size: 16px; }
+.item span { color: var(--muted); font-size: 14px; }
+.muted { color: var(--muted); }
+.err { color: var(--bad); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+label { display: block; font-size: 14px; color: var(--muted); margin: 12px 0 4px; }
+input { width: 100%; font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--text); }
+.report h1 { font-size: 21px; margin: 4px 0 10px; }
+.report h2 { font-size: 17px; margin: 22px 0 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.report p, .report li { font-size: 15px; }
+.report code { font-size: 13px; background: var(--chip); padding: 1px 4px; border-radius: 4px; }
+.report img, .plots img { width: 100%; height: auto; border-radius: 8px; background: #fff; display: block; }
+.tablewrap { overflow-x: auto; margin: 8px -16px; padding: 0 16px; -webkit-overflow-scrolling: touch; }
+table { border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; background: var(--card); }
+th:first-child, td:first-child { text-align: left; position: sticky; left: 0; background: var(--card); }
+.report { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px 16px 16px; }
+.plots { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.plots a { display: block; }
+.files { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.files button { font-size: 13px; }
+.hint { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <button class="icon" id="back" hidden aria-label="Back">‹</button>
+    <h1 id="title">PowerMeter</h1>
+    <button class="icon" id="reload" aria-label="Reload">↻</button>
+    <button class="icon" id="gear" aria-label="Settings">⚙</button>
+  </div>
+  <div class="tabs" id="riders"></div>
+  <div class="tabs" id="types"></div>
+</header>
+<main id="main"></main>
+
+<script>
+"use strict";
+const TYPES = [["RACES", "Races"], ["SEASON", "Season"], ["PROTOCOL", "Protocol"], ["NORMAL", "Normal"]];
+const $ = id => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem("pm." + k) || ""; } catch (e) { return ""; } },
+  set(k, v) { try { localStorage.setItem("pm." + k, v); } catch (e) {} },
+};
+let tree = null;          // [{path, sha}] of everything under RESULTS/
+const blobUrls = {};
+
+function cfg() { return { repo: store.get("repo"), branch: store.get("branch") || "main", token: store.get("token") }; }
+
+async function api(path, raw) {
+  const c = cfg();
+  const r = await fetch(`https://api.github.com/repos/${c.repo}/${path}`, {
+    headers: { Authorization: `Bearer ${c.token}`, Accept: raw ? "application/vnd.github.raw" : "application/vnd.github+json" },
+    cache: "no-store",
+  });
+  if (r.status === 401) throw new Error("The token was refused (expired or mistyped). Open ⚙ and paste a new one.");
+  if (r.status === 404) throw new Error(`Not found: ${c.repo}. Check the repository name and that the token has access to it.`);
+  if (!r.ok) throw new Error(`GitHub said ${r.status} ${r.statusText}`);
+  return raw ? r.blob() : r.json();
+}
+
+async function loadTree(force) {
+  if (tree && !force) return tree;
+  const t = await api(`git/trees/${encodeURIComponent(cfg().branch)}?recursive=1`);
+  tree = t.tree.filter(x => x.type === "blob" && x.path.startsWith("RESULTS/"));
+  return tree;
+}
+
+async function fileUrl(path) {            // private repo: fetch with the token, show as blob URL
+  if (!blobUrls[path]) blobUrls[path] = URL.createObjectURL(await api(`contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(cfg().branch)}`, true));
+  return blobUrls[path];
+}
+async function fileText(path) { return (await (await fetch(await fileUrl(path))).text()); }
+
+function route() {
+  const [rider, type, folder] = decodeURIComponent(location.hash.slice(1)).split("/").filter(Boolean);
+  return { rider, type, folder };
+}
+function go(rider, type, folder) { location.hash = "#" + [rider, type, folder].filter(Boolean).join("/"); }
+
+function folders(rider, type) {
+  const out = {};
+  for (const f of tree) {
+    const p = f.path.split("/");                     // RESULTS, RIDER, TYPE, folder, file
+    if (p.length === 5 && p[1] === rider && p[2] === type) (out[p[3]] = out[p[3]] || []).push(p[4]);
+  }
+  return Object.entries(out).sort((a, b) => b[0].localeCompare(a[0], undefined, { numeric: true }));
+}
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+const riders = () => [...new Set(tree.map(f => f.path.split("/")[1]).filter(r => r && !r.includes(".")))].sort();
+
+function niceDate(code) {
+  const m = /^(\d\d)(\d\d)(\d\d)([a-z]?)$/.exec(code);
+  if (!m) return null;
+  const d = new Date(2000 + +m[1], +m[2] - 1, +m[3]);
+  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" }) + (m[4] ? ` (${m[4]})` : "");
+}
+function label(folder) {
+  const r = /^(\d{6})-(\d{6})(.*)$/.exec(folder);
+  if (r) return `${niceDate(r[1]).replace(/^\w+ /, "")} – ${niceDate(r[2]).replace(/^\w+ /, "")}` + (r[3] ? ` ${r[3].replace(/_/g, " ").trim()}` : "");
+  return niceDate(folder) || folder;
+}
+
+function tabs(el, items, current, onPick) {
+  el.innerHTML = "";
+  for (const [key, text] of items) {
+    const b = document.createElement("button");
+    b.textContent = text;
+    if (key === current) b.className = "on";
+    b.onclick = () => onPick(key);
+    el.appendChild(b);
+  }
+}
+
+function settings(msg) {
+  $("title").textContent = "Settings";
+  $("back").hidden = !tree; $("riders").innerHTML = ""; $("types").innerHTML = "";
+  const c = cfg();
+  $("main").innerHTML = `<div class="card">
+    ${msg ? `<p class="err">${msg}</p>` : ""}
+    <p class="hint">Saved on this device only. The token only needs read access to the results repository.</p>
+    <label for="repo">Repository (owner/name)</label><input id="repo" placeholder="your-username/PowerMeter" autocapitalize="off" autocorrect="off" value="${c.repo}">
+    <label for="branch">Branch</label><input id="branch" value="${c.branch}" autocapitalize="off">
+    <label for="token">Read-only token</label><input id="token" type="password" placeholder="github_pat_…" value="${c.token}" autocapitalize="off" autocorrect="off">
+    <p><button class="primary" id="save">Save and open</button></p></div>`;
+  $("save").onclick = () => {
+    store.set("repo", $("repo").value.trim().replace(/^https:\/\/github.com\//, "").replace(/\/$/, ""));
+    store.set("branch", $("branch").value.trim() || "main");
+    store.set("token", $("token").value.trim());
+    tree = null; location.hash = "#"; render();
+  };
+}
+
+async function render() {
+  const c = cfg();
+  if (!c.repo || !c.token) return settings();
+  const main = $("main");
+  try {
+    if (!tree) main.innerHTML = `<p class="muted">Loading…</p>`;
+    await loadTree();
+  } catch (e) { return settings(e.message); }
+
+  let { rider, type, folder } = route();
+  const rs = riders();
+  if (!rs.length) { main.innerHTML = `<p class="muted">No results yet. Run a workflow first.</p>`; return; }
+  rider = rs.includes(rider) ? rider : (store.get("rider") && rs.includes(store.get("rider")) ? store.get("rider") : rs[0]);
+  type = TYPES.some(t => t[0] === type) ? type : (store.get("type") || "RACES");
+  store.set("rider", rider); store.set("type", type);
+  tabs($("riders"), rs.map(r => [r, r[0] + r.slice(1).toLowerCase()]), rider, r => go(r, type));
+  tabs($("types"), TYPES, type, t => go(rider, t));
+  $("back").hidden = !folder;
+
+  if (!folder) {
+    $("title").textContent = "PowerMeter";
+    const fs = folders(rider, type);
+    if (!fs.length) { main.innerHTML = `<p class="muted">No ${type.toLowerCase()} results for ${rider[0] + rider.slice(1).toLowerCase()} yet.</p>`; return; }
+    main.innerHTML = `<div class="list">${fs.map(([f, files]) => `<a class="item" href="#${rider}/${type}/${f}">
+      <b>${label(f)}</b><span>${f} · ${plural(files.filter(x => x.endsWith(".png")).length, "plot")}</span></a>`).join("")}</div>`;
+    window.scrollTo(0, +store.get("scroll." + rider + type) || 0);
+    return;
+  }
+  await showReport(rider, type, folder);
+}
+
+async function showReport(rider, type, folder) {
+  const main = $("main");
+  $("title").textContent = label(folder);
+  const base = `RESULTS/${rider}/${type}/${folder}/`;
+  const files = folders(rider, type).find(([f]) => f === folder);
+  if (!files) { main.innerHTML = `<p class="err">This folder is gone. ↻ to reload.</p>`; return; }
+  const names = files[1].sort();
+  const md = names.find(n => n.endsWith("report.md"));
+  main.innerHTML = `<p class="muted">Loading…</p>`;
+  try {
+    let html = "", used = new Set();
+    if (md) {
+      let text = await fileText(base + md);
+      html = marked.parse(text);
+      for (const m of text.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) used.add(decodeURIComponent(m[1]));
+    }
+    const pngs = names.filter(n => n.endsWith(".png") && !used.has(n));
+    const other = names.filter(n => !n.endsWith(".png") && n !== md && !n.endsWith("summary.json"));
+    main.innerHTML = `<div class="plots">${pngs.map(n => `<a data-src="${n}" target="_blank"><img alt="${n}" data-src="${n}"></a>`).join("")}</div>
+      ${other.length ? `<div class="files">${other.map(n => `<button data-file="${n}">${n.replace(/^[a-z]{2}\d{6}(-\d{6})?(_without[_\d]+)?/, "")}</button>`).join("")}</div>` : ""}
+      <article class="report">${html || "<p class='muted'>No report in this folder.</p>"}</article>`;
+    main.querySelectorAll(".report table").forEach(t => { const w = document.createElement("div"); w.className = "tablewrap"; t.replaceWith(w); w.appendChild(t); });
+    for (const img of main.querySelectorAll("img")) {
+      const src = img.dataset.src || img.getAttribute("src");
+      if (!src || /^https?:/.test(src)) continue;
+      img.removeAttribute("src");
+      fileUrl(base + decodeURIComponent(src)).then(u => { img.src = u; const a = img.closest("a"); if (a) a.href = u; })
+        .catch(() => img.alt = `${src} could not be loaded`);
+      if (!img.closest("a")) { const a = document.createElement("a"); a.target = "_blank"; img.replaceWith(a); a.appendChild(img); }
+    }
+    main.querySelectorAll("button[data-file]").forEach(b => b.onclick = async () => {
+      const u = await fileUrl(base + b.dataset.file);
+      const a = document.createElement("a"); a.href = u; a.download = b.dataset.file; a.click();
+    });
+    window.scrollTo(0, 0);
+  } catch (e) { main.innerHTML = `<p class="err">${e.message}</p>`; }
+}
+
+window.addEventListener("scroll", () => { const r = route(); if (!r.folder && r.rider) store.set("scroll." + r.rider + r.type, String(window.scrollY)); }, { passive: true });
+window.addEventListener("hashchange", render);
+$("back").onclick = () => { const r = route(); r.folder ? go(r.rider, r.type) : render(); };
+$("gear").onclick = () => settings();
+$("reload").onclick = () => { tree = null; render(); };
+render();
+</script>
+</body>
+</html>
