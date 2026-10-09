@@ -62,6 +62,16 @@ th:first-child, td:first-child { text-align: left; position: sticky; left: 0; ba
 .files { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
 .files button { font-size: 13px; }
 .hint { font-size: 13px; color: var(--muted); }
+img.zoomable { cursor: zoom-in; }
+#lb { position: fixed; inset: 0; z-index: 20; background: #000; display: flex; flex-direction: column; }
+#lb[hidden] { display: none; }
+#lb .lbbar { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; color: #ddd; font-size: 13px; }
+#lb .lbbar button { background: #2a2d33; color: #fff; }
+#lb .lbscroll { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; display: flex; align-items: center; }
+#lb img { width: 100%; height: auto; display: block; background: #fff; margin: auto 0; }
+#lb.full .lbscroll { align-items: flex-start; }
+#lb.full img { width: auto; max-width: none; margin: 0; }
 </style>
 </head>
 <body>
@@ -76,6 +86,10 @@ th:first-child, td:first-child { text-align: left; position: sticky; left: 0; ba
   <div class="tabs" id="types"></div>
 </header>
 <main id="main"></main>
+<div id="lb" hidden>
+  <div class="lbbar"><button id="lbzoom">Full size</button><span>pinch or drag to look around</span><button id="lbclose">✕ Close</button></div>
+  <div class="lbscroll"><img id="lbimg" alt=""></div>
+</div>
 
 <script>
 "use strict";
@@ -223,7 +237,7 @@ async function showReport(rider, type, folder) {
     }
     const pngs = names.filter(n => n.endsWith(".png") && !used.has(n));
     const other = names.filter(n => !n.endsWith(".png") && n !== md && !n.endsWith("summary.json"));
-    main.innerHTML = `<div class="plots">${pngs.map(n => `<a data-src="${n}" target="_blank"><img alt="${n}" data-src="${n}"></a>`).join("")}</div>
+    main.innerHTML = `<div class="plots">${pngs.map(n => `<img alt="${n}" data-src="${n}">`).join("")}</div>
       ${other.length ? `<div class="files">${other.map(n => `<button data-file="${n}">${n.replace(/^[a-z]{2}\d{6}(-\d{6})?(_without[_\d]+)?/, "")}</button>`).join("")}</div>` : ""}
       <article class="report">${html || "<p class='muted'>No report in this folder.</p>"}</article>`;
     main.querySelectorAll(".report table").forEach(t => { const w = document.createElement("div"); w.className = "tablewrap"; t.replaceWith(w); w.appendChild(t); });
@@ -231,9 +245,10 @@ async function showReport(rider, type, folder) {
       const src = img.dataset.src || img.getAttribute("src");
       if (!src || /^https?:/.test(src)) continue;
       img.removeAttribute("src");
-      fileUrl(base + decodeURIComponent(src)).then(u => { img.src = u; const a = img.closest("a"); if (a) a.href = u; })
+      fileUrl(base + decodeURIComponent(src)).then(u => { img.src = u; })
         .catch(() => img.alt = `${src} could not be loaded`);
-      if (!img.closest("a")) { const a = document.createElement("a"); a.target = "_blank"; img.replaceWith(a); a.appendChild(img); }
+      img.classList.add("zoomable");
+      img.onclick = () => { if (img.src) openImage(img.src); };   // in-page: a new tab can't show a private image
     }
     main.querySelectorAll("button[data-file]").forEach(b => b.onclick = async () => {
       const u = await fileUrl(base + b.dataset.file);
@@ -243,8 +258,23 @@ async function showReport(rider, type, folder) {
   } catch (e) { main.innerHTML = `<p class="err">${e.message}</p>`; }
 }
 
+// Plot viewer inside the page. Back (button or swipe) closes it and stays on the report.
+function openImage(src) {
+  $("lbimg").src = src;
+  $("lb").classList.remove("full"); $("lbzoom").textContent = "Full size";
+  $("lb").hidden = false; document.body.style.overflow = "hidden";
+  history.pushState({ lb: true }, "");
+}
+function closeImage() { $("lb").hidden = true; document.body.style.overflow = ""; }
+$("lbclose").onclick = () => history.back();
+$("lbzoom").onclick = () => {
+  const full = $("lb").classList.toggle("full");
+  $("lbzoom").textContent = full ? "Fit to screen" : "Full size";
+};
+window.addEventListener("popstate", () => { if (!$("lb").hidden) closeImage(); });
+
 window.addEventListener("scroll", () => { const r = route(); if (!r.folder && r.rider) store.set("scroll." + r.rider + r.type, String(window.scrollY)); }, { passive: true });
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", () => { closeImage(); render(); });
 $("back").onclick = () => { const r = route(); r.folder ? go(r.rider, r.type) : render(); };
 $("gear").onclick = () => settings();
 $("reload").onclick = () => { tree = null; render(); };
